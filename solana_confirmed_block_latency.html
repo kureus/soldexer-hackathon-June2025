@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Solana Confirmed Block Latency</title>
+  <script>
+  const LOG_LEVEL = 'error'; // 'debug', 'warn', 'error', 'none'
+  const log = {
+    debug: (...args) => ['debug', 'warn', 'error'].includes(LOG_LEVEL) && console.log(...args),
+    warn: (...args) => ['warn', 'error'].includes(LOG_LEVEL) && console.warn(...args),
+    error: (...args) => ['error'].includes(LOG_LEVEL) && console.error(...args)
+  };
+  window.__parserReady = new Promise(resolve => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/parse-prometheus-text-format@1.1.1';
+    s.onload = () => {
+      try {
+        window.__parsePrometheusTextFormat = window.parsePrometheusTextFormat;
+        resolve();
+      } catch (err) {
+        console.error("❌ Failed to assign parser:", err);
+      }
+    };
+    s.onerror = err => {
+      console.error("❌ Failed to load Prometheus parser script", err);
+    };
+    document.head.appendChild(s);
+  });
+  setTimeout(() => {
+    if (!window.__parsePrometheusTextFormat) {
+      console.warn("⚠️ Parser not ready after timeout.");
+    }
+  }, 2000);
+
+  window.__parserReady.catch((err) => {
+    console.error("🚫 Prometheus parser failed to load:", err);
+  });
+  </script>
+<script>
+  const endpoints = {
+    helius: 'http://localhost:8080/https://s-h-b-s.sqd.dev/helius/metrics',
+    getblock: 'http://localhost:8080/https://s-h-b-s.sqd.dev/getblock/metrics',
+    shyft: 'http://localhost:8080/https://s-h-b-s.sqd.dev/shyft/metrics'
+  };
+
+  function getArrow(latency) {
+    if (latency < 150) return 'green';
+    if (latency < 200) return 'yellow';
+    return 'red';
+  }
+
+  async function fetchLatency(name, url) {
+    try {
+      const res = await fetch(url);
+      log.debug(`[${name}] status:`, res.status);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      log.debug(`[${name}] raw text:`, text.slice(0, 300));
+      if (!window.__parsePrometheusTextFormat) throw new Error('Parser not initialized');
+      const parsed = window.__parsePrometheusTextFormat(text);
+      log.debug(`[${name}] parsed:`, parsed);
+      const metric = parsed.find(m => m.name === 'sqd_hotblocks_last_block_lag_ms');
+      if (metric && metric.metrics.length > 0) {
+        const value = parseFloat(metric.metrics[0].value);
+        log.debug(`[${name}] latency:`, value);
+        return value;
+      } else {
+        log.warn(`[${name}] metric not found`);
+        return null;
+      }
+    } catch (e) {
+      log.error(`${name} fetch error`, e);
+      return null;
+    }
+  }
+
+  async function updateLatencies() {
+    const data = await Promise.all([
+      fetchLatency('helius', endpoints.helius),
+      fetchLatency('getblock', endpoints.getblock),
+      fetchLatency('shyft', endpoints.shyft)
+    ]);
+
+    const ids = ['helius', 'getblock', 'shyft'];
+    const latencyPairs = ids.map((id, i) => ({ id, value: data[i] })).filter(p => p.value !== null);
+    latencyPairs.sort((a, b) => a.value - b.value);
+
+    const latencies = {};
+    latencyPairs.forEach((pair, index) => {
+      const arrow = document.getElementById(`${pair.id}-arrow`);
+      const label = arrow.querySelector('.latency');
+      const lowest = latencyPairs[0].value;
+      const isFastest = index === 0;
+      label.innerHTML = `<span class="main-latency">${Math.round(pair.value)} ms</span>` +
+        (!isFastest ? `<br><span class="latency-diff">(+${Math.round(((pair.value - lowest) / lowest) * 100)}%)</span>` : '');
+
+      const color = index === 0 ? 'green' : index === 1 ? 'yellow' : 'red';
+      arrow.className = `arrow-wrapper ${color}`;
+      latencies[pair.id] = pair.value;
+    });
+
+    const latencyValues = Object.values(latencies);
+    if (latencyValues.length > 0) {
+      const min = Math.min(...latencyValues);
+      document.getElementById('hotblocks-latency').textContent = `${Math.round(min)} ms`;
+
+      const fastest = latencyPairs[0]?.id;
+      const iconMap = {
+        helius: 'https://helius.xyz/favicon.ico',
+        getblock: 'https://learnnear.club/wp-content/uploads/2022/06/getblock-logo.png',
+        shyft: 'https://shyft.to/favicon.ico'
+      };
+      const icon = document.getElementById('hotblocks-icon');
+      if (icon && fastest && iconMap[fastest]) {
+        icon.src = iconMap[fastest];
+        icon.style.display = 'inline';
+        icon.alt = `${fastest} logo`;
+      }
+    } else {
+      document.getElementById('hotblocks-latency').textContent = 'N/A';
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => {
+    window.__parserReady.then(() => {
+      log.debug("✅ Prometheus parser ready");
+      updateLatencies();
+      setInterval(updateLatencies, 1000);
+    });
+  });
+</script>
+  
+  <style>
+    body {
+      font-family: sans-serif;
+      background: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px;
+    }
+
+    .row {
+      display: flex;
+      justify-content: center;
+      gap: 60px;
+      margin-bottom: 0px;
+    }
+
+    .box {
+      border: 2px solid #000;
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      font-weight: bold;
+      min-width: 120px;
+      background: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .box img {
+      height: 40px;
+      margin-bottom: 10px;
+    }
+
+    .latency {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      padding: 6px 28px;
+      border-radius: 6px;
+      background: white;
+      font-weight: bold;
+      font-size: 14px;
+      color: black;
+      border: 1px solid #ccc;
+      z-index: 2;
+      white-space: pre-line;
+      text-align: center;
+    }
+
+    .arrow-wrapper {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      position: relative;
+      margin-top: 0;
+      height: 196px; /* 75% longer than original */
+      justify-content: flex-start;
+    }
+    
+    .arrow-line {
+      width: 8px;
+      height: 157px; /* 75% longer than original */
+      background-color: currentColor;
+      margin-top: 0;
+    }
+
+    .arrow-head {
+      width: 0;
+      height: 0;
+      border-left: 12px solid transparent;
+      border-right: 12px solid transparent;
+      border-top: 16px solid currentColor;
+    }
+
+    .green { color: #2ecc71; }
+    .yellow { color: #f1c40f; }
+    .red { color: #e74c3c; }
+
+    .hotblocks, .portal {
+      width: 100%;
+      max-width: 360px;
+      height: 69px;
+      background: #2c3e91;
+      padding: 15px 25px;
+      border-radius: 10px;
+      font-weight: bold;
+      color: white;
+      margin: 20px 0 8px;
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 120%;
+    }
+
+    .hotblocks {
+      width: 100%;
+      max-width: 540px;
+      height: 60px;
+      background: #111;
+      padding: 15px 25px;
+      border-radius: 10px;
+      font-weight: bold;
+      color: white;
+      margin: 20px 0 8px;
+      position: relative;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-size: 120%;
+    }
+    .portal { background: #2c3e91; }
+
+    .flow-group {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      position: relative;
+    }
+    .main-latency {
+    display: block;
+  }
+  .latency-diff {
+  font-size: 0.85em;
+  opacity: 0.7;
+}
+  </style>
+</head>
+<body>
+  <h1 style="font-size: 1.75rem; margin-bottom: 30px; text-align: center;">Solana Confirmed Block Latency</h1>
+
+  <div class="row">
+    <div class="flow-group">
+      <div class="box">
+        <img src="https://helius.xyz/favicon.ico" alt="Helius logo" onerror="this.style.display='none'"/>
+        Helius
+      </div>
+      <div class="arrow-wrapper" id="helius-arrow">
+        <div class="latency">...</div>
+        <div class="arrow-line"></div>
+        <div class="arrow-head"></div>
+      </div>
+    </div>
+    <div class="flow-group">
+      <div class="box">
+        <img src="https://learnnear.club/wp-content/uploads/2022/06/getblock-logo.png" alt="GetBlock logo" />
+        GetBlock
+      </div>
+      <div class="arrow-wrapper" id="getblock-arrow">
+        <div class="latency">...</div>
+        <div class="arrow-line"></div>
+        <div class="arrow-head"></div>
+      </div>
+    </div>
+    <div class="flow-group">
+      <div class="box">
+        <img src="https://shyft.to/favicon.ico" alt="Shyft logo" onerror="this.style.display='none'"/>
+        Shyft
+      </div>
+      <div class="arrow-wrapper" id="shyft-arrow">
+        <div class="latency">...</div>
+        <div class="arrow-line"></div>
+        <div class="arrow-head"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="hotblocks">
+    <span>Hotblocks</span>
+    <img id="hotblocks-icon" src="" alt="" style="height: 32px; margin-left: 12px; display: none;" />
+  </div>
+  <div class="arrow-wrapper green">
+    <div class="latency" id="hotblocks-latency">...</div>
+    <div class="arrow-line"></div>
+    <div class="arrow-head"></div>
+  </div>
+  <div class="portal">Portal</div>
+
+  <div style="position: absolute; top: 125px; right: 40px; max-width: 320px; background: #f9f9f9; border: 1px solid #ccc; border-radius: 10px; padding: 16px; font-size: 14px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+    <h3 style="margin-top: 0; font-size: 16px;">Did you know?</h3>
+    <strong>Solana Confirmed Blocks...</strong>
+    <ul style="margin-bottom: 15px; line-height: 1.5;">
+      <li>have received votes from ≥ 66 % stake, placing them on the network’s majority fork.</li>
+      <li>are created 1-2 slots, 400-800ms, after production (the slot leader’s 400 ms window in which it builds & broadcasts a "processed" block) </li>
+      <li>becomes finalized after ≥ 32 further confirmed descendants; until then, re-org risk is tiny but non-zero</li>
+    </ul>
+    <strong>Solana Block Timestamp...</strong>
+    <ul style="margin-bottom: 15px; line-height: 1.5;">
+      <li>is when the block was confirmed, i.e. when the super-majority of validators voted on it.</li>
+      <li>is calculated from the stake-weighted median of the vote-transaction timestamps around that block and is written once</li>
+      <li>not updated later when the block moves from confirmed to finalized</li>
+    </ul>
+    <strong>Solana Block Propagation...</strong>
+    <ul style="margin-bottom: 15px; line-height: 1.5;">
+      <li>is designed as a protocol to sends new blocks to staked validators first</li>
+      <li>means that RPC nodes are “about one block behind” the cluster by design, ~400ms on a healthy network, sometimes up to ≤ 1s if the node is busy or distant</li>
+    </ul>
+  </div>
+</body>
+</html>
